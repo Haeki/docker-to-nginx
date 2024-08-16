@@ -1,0 +1,29 @@
+services:
+  nginx-proxy-manager:
+    image: 'jc21/nginx-proxy-manager:latest'
+    restart: unless-stopped
+    ports:
+      # For first time setup add enable the port 81 mapping
+      # - '81:81'
+      - '443:443'
+      - '80:80'
+    container_name: nginx-proxy-manager
+    environment:
+      VIRTUAL_HOST: 'nginx-proxy-manager.haeki.de,services.haeki.de'
+      VIRTUAL_PORT: '81'
+    healthcheck:
+      test: ["CMD", "/usr/bin/check-health"]
+      interval: 10s
+      timeout: 3s
+    volumes:
+      - /mnt/data/nginx-proxy-manager/data:/data
+      - /mnt/data/nginx-proxy-manager/letsencrypt:/etc/letsencrypt
+  docker-to-ngimx:
+    image: haeki/docker-to-nginx:latest
+    container_name: docker-to-nginx
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/logs/docker-to-nginx:/app/logs
+    build:
+      context: .
+      dockerfile: Dockerfile
