@@ -123,7 +123,7 @@ def get_proxy_hosts(api_url: str, token: str, verify_ssl: bool = True) -> list[d
     """
     logger.debug("Requesting proxy hosts from nginx proxy manager")
     resp = requests.get(
-        f"{api_url}/nginx/proxy-hosts",
+        f"{api_url}/nginx/proxy-hosts?expand=certificate",
         verify=verify_ssl,
         timeout=60,
         headers={"Authorization": f"Bearer {token}"},
@@ -169,7 +169,11 @@ def update_proxy_host(
         "forward_port": forward_port,
     }
     if letsencrypt_config:
-        data["meta"] = _create_letsencrypt_config(letsencrypt_config)
+        if host_data["certificate_id"]:
+            cert_data = host_data.get("certificate")
+            if not compare_data(domain_names, cert_data["domain_names"]):
+                data["certificate_id"] = "new"
+                data["meta"] = _create_letsencrypt_config(letsencrypt_config)
     data.update(kwargs)
     if compare_data(data, host_data):
         logger.debug("No changes detected for host %s", host_data["id"])
