@@ -62,7 +62,7 @@ def get_matching_hosts(server_names: list[str], domains: dict[str, dict]):
 
 
 def attach_container_to_network(
-    container: Container, network_names: list[str]
+    container: Container, network_names: list[str], dry_run=False
 ) -> str | None:
     """
     Attach a container to a network in the list of network names
@@ -71,13 +71,17 @@ def attach_container_to_network(
     for net_name in network_names:
         net = networks.get(net_name, None)
         if net:
+            if dry_run:
+                logger.info("Would attach %s to network %s", container.name, net_name)
+                return net_name
+            logger.info("Attaching %s to network %s", container.name, net_name)
             net.connect(container)
             return net_name
     return None
 
 
 def attach_proxy_to_network(
-    container: Container, proxy_container: Container
+    container: Container, proxy_container: Container, dry_run=False
 ) -> str | None:
     """
     Attach the proxy_container to a network of the container
@@ -94,6 +98,12 @@ def attach_proxy_to_network(
     for net_name in sorted(networks.keys(), key=sort_func):
         net = networks.get(net_name, None)
         if net:
+            if dry_run:
+                logger.info(
+                    "Would attach %s to network %s", proxy_container.name, net_name
+                )
+                return net_name
+            logger.info("Attaching %s to network %s", proxy_container.name, net_name)
             net.connect(proxy_container)
             return net_name
     return None
@@ -117,6 +127,7 @@ def check_for_changes(
     proxy_container: str,
     attach_network: str | None = "container",
     proxy_host_defaults=None,
+    dry_run=False
 ):
     try:
         proxy_container = docker_client.containers.get(proxy_container)
@@ -151,6 +162,7 @@ def check_for_changes(
                 if attached_net := attach_container_to_network(
                     container=container,
                     network_names=proxy_network,
+                    dry_run=dry_run
                 ):
                     logger.info(f"Attached {cont_name} to network {attached_net}")
                     container.reload()
@@ -171,6 +183,7 @@ def check_for_changes(
                 if attached_net := attach_proxy_to_network(
                     container=container,
                     proxy_container=proxy_container,
+                    dry_run=dry_run
                 ):
                     logger.info(
                         "Attached the nginx-proxy-manager container (%s) to the container network %s",
@@ -199,6 +212,7 @@ def check_for_changes(
                 forward_host=proxy_host,
                 forward_port=forward_port,
                 letsencrypt_config=letsencrypt_config,
+                dry_run=dry_run,
                 **proxy_host_defaults,
             )
         else:
@@ -208,6 +222,7 @@ def check_for_changes(
                 forward_host=proxy_host,
                 forward_port=forward_port,
                 letsencrypt_config=letsencrypt_config,
+                dry_run=dry_run,
                 **proxy_host_defaults,
             )
 
@@ -277,6 +292,10 @@ def main():
 
     if args.dry_run:
         logger.info("Running in dry-run mode")
+    if args.interval <= 0:
+        logger.info("Starting one time check ")
+    else:
+        logger.info("Starting the check with interval %d sec", args.interval)
     while True:
         check_for_changes(
             nginx_proxy_manager=nginx_proxy_manager,
@@ -286,6 +305,7 @@ def main():
             proxy_container=config["proxy_container"],
             letsencrypt_config=config["letsencrypt"],
             proxy_host_defaults=config["proxy_host_defaults"],
+            dry_run=args.dry_run
         )
         if args.interval <= 0:
             break

@@ -143,6 +143,7 @@ def update_proxy_host(
     forward_host: str,
     letsencrypt_config: dict,
     verify_ssl: bool = True,
+    dry_run: bool = False,
     **kwargs,
 ) -> dict:
     """
@@ -157,6 +158,7 @@ def update_proxy_host(
         forward_host (str): the host the traffic should be forwarded to
         letsencrypt_config (dict): the configuration for letsencrypt
         verify_ssl (bool, optional): If the api url is https should the certificate be validated. Defaults to True.
+        dry_run (bool, optional): if set to True, the proxy host will not be updated. Defaults to False.
 
     Returns:
         dict: either the response from the api (usually the created proxy host) or the host_data if no changes were detected
@@ -171,6 +173,14 @@ def update_proxy_host(
     data.update(kwargs)
     if compare_data(data, host_data):
         logger.debug("No changes detected for host %s", host_data["id"])
+        return host_data
+    if dry_run:
+        logger.info(
+            "Dry run enabled. Would have updated proxy host %s with data: %s",
+            host_data["id"],
+            data,
+        )
+        host_data.update(data)
         return host_data
     logger.info("Updating proxy host %s", host_data["id"])
     logger.debug("Data: %s", data)
@@ -219,6 +229,7 @@ def create_proxy_host(
     forward_host: str,
     letsencrypt_config: dict,
     verify_ssl: bool = True,
+    dry_run: bool = False,
     **kwargs,
 ) -> dict:
     """
@@ -232,6 +243,7 @@ def create_proxy_host(
         forward_host (str): the host the traffic should be forwarded to
         letsencrypt_config (dict): the configuration for letsencrypt
         verify_ssl (bool, optional): If the api url is https should the certificate be validated. Defaults to True.
+        dry_run (bool, optional): if set to True, the proxy host will not be created. Defaults to False.
 
     Returns:
         dict: the response from the api (usually the created proxy host)
@@ -255,6 +267,15 @@ def create_proxy_host(
         "hsts_subdomains": False,
     }
     payload.update(kwargs)
+    if dry_run:
+        logger.info(
+            "Dry run enabled. Would have created new proxy host for domains %s proxied to %s:%s with payload %s",
+            domain_names,
+            forward_host,
+            forward_port,
+            payload,
+        )
+        return payload
     logger.debug(
         "Creating new proxy host for domains %s proxied to %s:%s",
         domain_names,
@@ -326,6 +347,7 @@ class ApiHandler:
         forward_port: int,
         forward_host: str,
         letsencrypt_config: dict,
+        dry_run: bool = False,
         **kwargs,
     ) -> dict:
         """
@@ -337,6 +359,7 @@ class ApiHandler:
             forward_port (int): the port the traffic should be forwarded to
             forward_host (str): the host the traffic should be forwarded to
             letsencrypt_config (dict): the configuration for letsencrypt
+            dry_run (bool, optional): if set to True, the proxy host will not be updated. Defaults to False.
 
         Returns:
             dict: either the response from the api (usually the created proxy host) or the host_data if no changes were detected
@@ -349,6 +372,7 @@ class ApiHandler:
             forward_port=forward_port,
             forward_host=forward_host,
             letsencrypt_config=letsencrypt_config,
+            dry_run=dry_run,
             **kwargs,
         )
 
@@ -358,6 +382,7 @@ class ApiHandler:
         forward_port: int,
         forward_host: str,
         letsencrypt_config: dict,
+        dry_run: bool = False,
         **kwargs,
     ) -> None:
         """
@@ -368,6 +393,7 @@ class ApiHandler:
             forward_port (int): the port the traffic should be forwarded to
             forward_host (str): the host the traffic should be forwarded to
             letsencrypt_config (dict): configuration for letsencrypt
+            dry_run (bool, optional): if set to True, the proxy host will not be created. Defaults to False.
 
         Returns:
             None
@@ -380,5 +406,6 @@ class ApiHandler:
             forward_port=forward_port,
             forward_host=forward_host,
             letsencrypt_config=letsencrypt_config,
+            dry_run=dry_run,
             **kwargs,
         )
