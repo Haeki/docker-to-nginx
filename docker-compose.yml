@@ -21,6 +21,9 @@ services:
   docker-to-ngimx:
     image: haeki/docker-to-nginx:latest
     container_name: docker-to-nginx
+    depends_on:
+      nginx-proxy-manager:
+        condition: service_healthy
     volumes:
       - ./config.json:/app/config.json
       - /var/run/docker.sock:/var/run/docker.sock
