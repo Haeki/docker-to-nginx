@@ -67,6 +67,7 @@ def attach_container_to_network(
     """
     Attach a container to a network in the list of network names
     """
+    logger.debug("Try to attach %s to a network in %s", container.name, network_names)
     networks = {n.name: n for n in container.client.networks.list()}
     for net_name in network_names:
         net = networks.get(net_name, None)
@@ -86,7 +87,18 @@ def attach_proxy_to_network(
     """
     Attach the proxy_container to a network of the container
     """
-    networks = {n.name: n for n in container.client.networks.list()}
+    container_networks = set(container.attrs["NetworkSettings"]["Networks"].keys())
+    logger.debug(
+        "Try to attach %s to a network of %s %s",
+        proxy_container.name,
+        container.name,
+        container_networks,
+    )
+    networks = {
+        n.name: n
+        for n in container.client.networks.list()
+        if n.name in container_networks
+    }
 
     def sort_func(n: str):
         if n == "bridge":
@@ -127,7 +139,7 @@ def check_for_changes(
     proxy_container: str,
     attach_network: str | None = "container",
     proxy_host_defaults=None,
-    dry_run=False
+    dry_run=False,
 ):
     try:
         proxy_container = docker_client.containers.get(proxy_container)
@@ -160,9 +172,7 @@ def check_for_changes(
         if not proxy_host:
             if attach_network == "container":
                 if attached_net := attach_container_to_network(
-                    container=container,
-                    network_names=proxy_network,
-                    dry_run=dry_run
+                    container=container, network_names=proxy_network, dry_run=dry_run
                 ):
                     logger.info(f"Attached {cont_name} to network {attached_net}")
                     container.reload()
@@ -183,7 +193,7 @@ def check_for_changes(
                 if attached_net := attach_proxy_to_network(
                     container=container,
                     proxy_container=proxy_container,
-                    dry_run=dry_run
+                    dry_run=dry_run,
                 ):
                     logger.info(
                         "Attached the nginx-proxy-manager container (%s) to the container network %s",
@@ -305,7 +315,7 @@ def main():
             proxy_container=config["proxy_container"],
             letsencrypt_config=config["letsencrypt"],
             proxy_host_defaults=config["proxy_host_defaults"],
-            dry_run=args.dry_run
+            dry_run=args.dry_run,
         )
         if args.interval <= 0:
             break
