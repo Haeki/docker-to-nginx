@@ -69,8 +69,8 @@ def compare_data(data1, data2) -> None:
     if isinstance(data1, Iterable) and isinstance(data2, Iterable):
         if len(data1) != len(data2):
             return False
-        for i in range(len(data1)):
-            if not compare_data(data1[i], data2[i]):
+        for i in data1:
+            if i not in data2:
                 return False
         return True
     if type(data1) != type(data2):
