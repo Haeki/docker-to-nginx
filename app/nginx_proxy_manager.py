@@ -195,7 +195,7 @@ def update_proxy_host(
         json=data,
         headers={"Authorization": f"Bearer {token}"},
     )
-    logger.debug("Response: %s", resp.text)
+    logger.debug("Response [%s]: %s", resp.status_code, resp.text)
     resp.raise_for_status()
     res = resp.json()
     logger.debug("Updated proxy host %s", res)
@@ -293,6 +293,7 @@ def create_proxy_host(
         headers={"Authorization": f"Bearer {token}"},
         json=payload,
     )
+    logger.debug("Response [%s]: %s", resp.status_code, resp.text)
     resp.raise_for_status()
     res = resp.json()
     logger.debug("Created new proxy host: %s", res)
