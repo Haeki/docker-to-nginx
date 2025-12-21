@@ -105,7 +105,7 @@ def attach_container_to_network(
 
 
 def attach_proxy_to_network(
-    container: Container, proxy_container: Container, dry_run=False
+    container: Container, proxy_container: Container, dry_run=False, force=False
 ) -> str | None:
     """
     Attach the proxy_container to a network of the container
@@ -132,8 +132,15 @@ def attach_proxy_to_network(
         return 2
 
     for net_name in sorted(networks.keys(), key=sort_func):
-        net = networks.get(net_name, None)
+        net: Network = networks.get(net_name, None)
         if net:
+            if not force and proxy_container.id in net.attrs["Containers"]:
+                logger.debug(
+                    "%s is already attached to network %s",
+                    proxy_container.name,
+                    net_name,
+                )
+                return None
             if dry_run:
                 logger.info(
                     "Would attach %s to network %s", proxy_container.name, net_name
@@ -201,46 +208,35 @@ def check_for_changes(
         domain_names = [s.strip() for s in virtual_host.split(",")]
         matching_host = get_matching_hosts(domain_names, domains)
         proxy_host = find_proxy_host(container, proxy_network)
-        if not proxy_host:
-            if attach_network == "container":
-                if attach_container_to_network(
-                    docker_client=docker_client,
-                    container=container,
-                    network=proxy_network,
-                    dry_run=dry_run,
-                ):
-                    logger.info(f"Attached {cont_name} to network {proxy_network.name}")
-                    time.sleep(1)
-                    container.reload()
-                    proxy_host = find_proxy_host(container, proxy_network)
-                    if not proxy_host:
-                        raise NullResource(
-                            f"Failed to attach {cont_name} to network {proxy_network}"
-                        )
-            elif attach_network == "proxy":
-                if attached_net := attach_proxy_to_network(
-                    container=container,
-                    proxy_container=proxy_container,
-                    dry_run=dry_run,
-                ):
-                    logger.info(
-                        "Attached the nginx-proxy-manager container (%s) to the container network %s",
-                        proxy_container.name,
-                        attached_net,
-                    )
-                    proxy_host = find_proxy_host(container, attached_net)
-                    if not proxy_host:
-                        raise NullResource(
-                            f"Failed to attach {proxy_container.name} to network {attached_net}"
-                        )
-                else:
-                    raise NullResource(
-                        f"Failed to attach the nginx-proxy-manager container ({proxy_container.name}) to any of the containers networks {cont_name}"
-                    )
-            else:
-                raise NullResource(
-                    f"Container {cont_name} is not attached to any network in {proxy_network}"
+        if attach_network == "container":
+            if attach_container_to_network(
+                docker_client=docker_client,
+                container=container,
+                network=proxy_network,
+                dry_run=dry_run,
+            ):
+                logger.info(f"Attached {cont_name} to network {proxy_network.name}")
+                time.sleep(1)
+                container.reload()
+            proxy_host = find_proxy_host(container, proxy_network)
+        elif attach_network == "proxy":
+            if attached_net := attach_proxy_to_network(
+                container=container,
+                proxy_container=proxy_container,
+                dry_run=dry_run,
+            ):
+                logger.info(
+                    "Attached the nginx-proxy-manager container (%s) to the container network %s",
+                    proxy_container.name,
+                    attached_net,
                 )
+            proxy_host = find_proxy_host(container, attached_net)
+        else:
+            proxy_host = find_proxy_host(container, proxy_network)
+        if not proxy_host:
+            raise NullResource(
+                f"proxy_host for {cont_name} not found"
+            )
         if matching_host:
             logger.debug("Found matching host for %s", domain_names)
             nginx_proxy_manager.update_proxy_host(
