@@ -459,7 +459,7 @@ def main():
 
     docker_client = docker.from_env()
 
-    init()
+    init(docker_client=docker_client, config=config, dry_run=args.dry_run)
 
     nginx_proxy_manager = ApiHandler(
         api_url=config["nginx_proxy_manager_url"],
