@@ -3,6 +3,8 @@ import argparse
 import logging
 import time
 import sys
+import threading
+import signal
 from logging.handlers import RotatingFileHandler
 
 import docker
@@ -50,12 +52,12 @@ def get_env_vars(container: Container) -> dict:
     attrs = container.attrs
     return dict(x.split("=", 1) for x in attrs["Config"]["Env"])
 
+
 def get_labels(container: Container) -> dict:
     """
     Get the labels of a container as a dict
     """
     return container.attrs["Config"]["Labels"]
-
 
 
 def get_matching_hosts(domain_names: list[str], domains: dict[str, dict]):
@@ -78,7 +80,7 @@ def attach_container_to_network(
     container: Container,
     network: Network | str,
     dry_run=False,
-    force=False
+    force=False,
 ) -> str | None:
     """
     Attach a container to a network
@@ -89,7 +91,9 @@ def attach_container_to_network(
     else:
         network.reload()
     if not force and container.id in network.attrs["Containers"]:
-        logger.debug("%s is already attached to network %s", container.name, network.name)
+        logger.debug(
+            "%s is already attached to network %s", container.name, network.name
+        )
         return
     if dry_run:
         logger.info("Would attach %s to network %s", container.name, network.name)
@@ -188,6 +192,9 @@ def check_for_changes(
         virtual_port = labels.get("VIRTUAL_PORT", env_vars.get("VIRTUAL_PORT", 80))
         if not virtual_host:
             return
+        logger.info(
+            "Processing container %s as virtual_host: %s", cont_name, virtual_host
+        )
         forward_port = int(virtual_port)
         domain_names = [s.strip() for s in virtual_host.split(",")]
         matching_host = get_matching_hosts(domain_names, domains)
@@ -198,7 +205,7 @@ def check_for_changes(
                     docker_client=docker_client,
                     container=container,
                     network=proxy_network,
-                    dry_run=dry_run
+                    dry_run=dry_run,
                 )
                 logger.info(f"Attached {cont_name} to network {proxy_network}")
                 container.reload()
@@ -253,7 +260,9 @@ def check_for_changes(
                 **proxy_host_defaults,
             )
 
-    for container in docker_client.containers.list():
+    containers = docker_client.containers.list()
+    logger.debug("Checking %d containers", len(containers))
+    for container in containers:
         try:
             check_container(container, domains)
         except Exception:
@@ -275,6 +284,7 @@ def setup_logger(log_path: str, verbose: bool):
     stream_handler = logging.StreamHandler(sys.stdout)
     stream_handler.setFormatter(formatter)
     root_logger.addHandler(stream_handler)
+
 
 def get_container_by_label(
     docker_client: docker.DockerClient, label_key: str | dict
@@ -314,9 +324,7 @@ def init(config: dict, docker_client: docker.DockerClient, dry_run=False) -> int
             config["proxy_container"] = container
             logger.info("Using proxy container %s from config", container.name)
         except NotFound:
-            logger.error(
-                "Could not find proxy container %s", config["proxy_container"]
-            )
+            logger.error("Could not find proxy container %s", config["proxy_container"])
             return -1
     if not config.get("own_container"):
         # Try to find own container
@@ -347,9 +355,12 @@ def init(config: dict, docker_client: docker.DockerClient, dry_run=False) -> int
                 if compose_project:
                     try:
                         network: Network = docker_client.networks.get(net["NetworkID"])
-                        if network.attrs.get("Labels", {}).get(
-                            "com.docker.compose.project"
-                        ) == compose_project:
+                        if (
+                            network.attrs.get("Labels", {}).get(
+                                "com.docker.compose.project"
+                            )
+                            == compose_project
+                        ):
                             config["proxy_network"] = net_name
                             break
                     except NotFound:
@@ -364,21 +375,15 @@ def init(config: dict, docker_client: docker.DockerClient, dry_run=False) -> int
                 )
                 return -1
         else:
-            logger.error(
-                "Proxy container %s has no networks", container.name
-            )
+            logger.error("Proxy container %s has no networks", container.name)
             return -1
     else:
         try:
             _ = docker_client.networks.get(config["proxy_network"])
         except NotFound:
-            logger.error(
-                "Could not find proxy network %s", config["proxy_network"]
-            )
+            logger.error("Could not find proxy network %s", config["proxy_network"])
             return -1
-        logger.info(
-            "Using proxy network %s from config", config["proxy_network"]
-        )
+        logger.info("Using proxy network %s from config", config["proxy_network"])
     if config.get("attach_self") == "container":
         attach_container_to_network(
             docker_client=docker_client,
@@ -393,7 +398,10 @@ def init(config: dict, docker_client: docker.DockerClient, dry_run=False) -> int
             dry_run=dry_run,
         )
     else:
-        if not config["own_container"].id in config["proxy_network"].attrs["Containers"]:
+        if (
+            not config["own_container"].id
+            in config["proxy_network"].attrs["Containers"]
+        ):
             logger.error(
                 "Own container %s is not attached to proxy network %s",
                 config["own_container"].name,
@@ -415,9 +423,6 @@ def init(config: dict, docker_client: docker.DockerClient, dry_run=False) -> int
             config["nginx_proxy_manager_url"],
         )
     return 0
-
-
-
 
 
 def main():
@@ -469,6 +474,14 @@ def main():
         logger.info("Starting one time check ")
     else:
         logger.info("Starting the check with interval %d sec", args.interval)
+
+    stop_event = threading.Event()
+
+    def interrupt_handler(signum, frame):
+        logger.info("Interrupt received, stopping...")
+        stop_event.set()
+
+    signal.signal(signal.SIGINT, interrupt_handler)
     while True:
         check_for_changes(
             nginx_proxy_manager=nginx_proxy_manager,
@@ -482,7 +495,7 @@ def main():
         )
         if args.interval <= 0:
             break
-        time.sleep(args.interval)
+        stop_event.wait(args.interval)
 
 
 if __name__ == "__main__":
