@@ -28,6 +28,8 @@ def load_config(config_path: str) -> dict:
         "proxy_container": "nginx-proxy-manager",
         "verify_ssl": True,
         "proxy_host_defaults": None,
+        "attach_to_proxy": True,
+        "own_container": "docker-to-nginx",
     }
     with open(config_path, "r") as f:
         loaded = json.load(f)
@@ -316,6 +318,13 @@ def main():
         logger.info("Starting one time check ")
     else:
         logger.info("Starting the check with interval %d sec", args.interval)
+    if config["attach_to_proxy"]:
+        try:
+            own_container = docker_client.containers.get(config["own_container"])
+        except NotFound:
+            logger.warning("Could not find own container %s", config["own_container"])
+            return
+        attach_container_to_network(own_container, config["proxy_network"])
     while True:
         check_for_changes(
             nginx_proxy_manager=nginx_proxy_manager,
