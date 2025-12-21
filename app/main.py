@@ -460,7 +460,8 @@ def main():
 
     docker_client = docker.from_env()
 
-    init(docker_client=docker_client, config=config, dry_run=args.dry_run)
+    if exit_code := init(docker_client=docker_client, config=config, dry_run=args.dry_run):
+        return exit_code
 
     nginx_proxy_manager = ApiHandler(
         api_url=config["nginx_proxy_manager_url"],
@@ -497,7 +498,8 @@ def main():
         if args.interval <= 0:
             break
         stop_event.wait(args.interval)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
