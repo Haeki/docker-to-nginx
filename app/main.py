@@ -45,19 +45,26 @@ def get_env_vars(container: Container):
     attrs = container.attrs
     return dict(x.split("=", 1) for x in attrs["Config"]["Env"])
 
+def get_labels(container: Container):
+    """
+    Get the labels of a container as a dict
+    """
+    return container.attrs["config"]["Labels"]
 
-def get_matching_hosts(server_names: list[str], domains: dict[str, dict]):
+
+
+def get_matching_hosts(domain_names: list[str], domains: dict[str, dict]):
     """
     Check if a host with the given server names is already found in the domains dict
     If multiple servernames match to different hosts, return None
     """
     res: dict = None
-    for server_name in server_names:
-        if server_name in domains:
-            if res and res != domains[server_name]:
-                print(f"Server {server_name} is already registered with {res['id']}")
+    for domain_name in domain_names:
+        if domain_name in domains:
+            if res and res != domains[domain_name]:
+                print(f"Server {domain_name} is already registered with {res['id']}")
                 return None
-            res = domains[server_name]
+            res = domains[domain_name]
     return res
 
 
@@ -163,11 +170,14 @@ def check_for_changes(
     def check_container(container: Container, domains: dict[str, dict]):
         cont_name = container.name
         env_vars = get_env_vars(container)
-        if "VIRTUAL_HOST" not in env_vars:
+        labels = get_labels(container)
+        virtual_host = labels.get("VIRTUAL_HOST", env_vars.get("VIRTUAL_HOST", None))
+        virtual_port = labels.get("VIRTUAL_PORT", env_vars.get("VIRTUAL_PORT", 80))
+        if not virtual_host:
             return
-        forward_port = int(env_vars.get("VIRTUAL_PORT", 80))
-        server_names = [s.strip() for s in env_vars["VIRTUAL_HOST"].split(",")]
-        matching_host = get_matching_hosts(server_names, domains)
+        forward_port = int(virtual_port)
+        domain_names = [s.strip() for s in virtual_host.split(",")]
+        matching_host = get_matching_hosts(domain_names, domains)
         proxy_host = find_proxy_host(container, proxy_network)
         if not proxy_host:
             if attach_network == "container":
@@ -215,10 +225,10 @@ def check_for_changes(
                     f"Container {cont_name} is not attached to any network in {proxy_network}"
                 )
         if matching_host:
-            logger.debug("Found matching host for %s", server_names)
+            logger.debug("Found matching host for %s", domain_names)
             nginx_proxy_manager.update_proxy_host(
                 host_data=matching_host,
-                domain_names=server_names,
+                domain_names=domain_names,
                 forward_host=proxy_host,
                 forward_port=forward_port,
                 letsencrypt_config=letsencrypt_config,
@@ -226,9 +236,9 @@ def check_for_changes(
                 **proxy_host_defaults,
             )
         else:
-            logger.info("Creating new host for %s", server_names)
+            logger.info("Creating new host for %s", domain_names)
             nginx_proxy_manager.create_proxy_host(
-                domain_names=server_names,
+                domain_names=domain_names,
                 forward_host=proxy_host,
                 forward_port=forward_port,
                 letsencrypt_config=letsencrypt_config,
