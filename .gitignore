@@ -3,6 +3,10 @@ config.json
 .vscode
 logs/
 *.log*
+letsencrypt/
+data/
+config/
+certbot/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
