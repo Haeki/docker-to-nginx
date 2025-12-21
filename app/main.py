@@ -95,12 +95,13 @@ def attach_container_to_network(
         logger.debug(
             "%s is already attached to network %s", container.name, network.name
         )
-        return
+        return None
     if dry_run:
         logger.info("Would attach %s to network %s", container.name, network.name)
-        return
+        return False
     logger.info("Attaching %s to network %s", container.name, network.name)
     network.connect(container)
+    return True
 
 
 def attach_proxy_to_network(
@@ -202,19 +203,20 @@ def check_for_changes(
         proxy_host = find_proxy_host(container, proxy_network)
         if not proxy_host:
             if attach_network == "container":
-                attach_container_to_network(
+                if attach_container_to_network(
                     docker_client=docker_client,
                     container=container,
                     network=proxy_network,
                     dry_run=dry_run,
-                )
-                logger.info(f"Attached {cont_name} to network {proxy_network}")
-                container.reload()
-                proxy_host = find_proxy_host(container, proxy_network)
-                if not proxy_host:
-                    raise NullResource(
-                        f"Failed to attach {cont_name} to network {proxy_network}"
-                    )
+                ):
+                    logger.info(f"Attached {cont_name} to network {proxy_network.name}")
+                    time.sleep(1)
+                    container.reload()
+                    proxy_host = find_proxy_host(container, proxy_network)
+                    if not proxy_host:
+                        raise NullResource(
+                            f"Failed to attach {cont_name} to network {proxy_network}"
+                        )
             elif attach_network == "proxy":
                 if attached_net := attach_proxy_to_network(
                     container=container,
