@@ -8,6 +8,7 @@ from logging.handlers import RotatingFileHandler
 import docker
 from docker.errors import NullResource, NotFound
 from docker.models.containers import Container
+from docker.models.networks import Network
 from nginx_proxy_manager import ApiHandler
 
 
@@ -20,16 +21,18 @@ def load_config(config_path: str) -> dict:
     """
     _defaults = {
         "letsencrypt": None,
-        "nginx_proxy_manager_url": "http://localhost:81/api",
+        "nginx_proxy_manager_url": None,
         "nginx_proxy_manager_user": None,
         "nginx_proxy_manager_password": None,
-        "attach_network": "proxy",
-        "proxy_network": "bridge",
-        "proxy_container": "nginx-proxy-manager",
+        "attach_network": "container",
+        "proxy_network": None,
+        "proxy_container": None,
+        "proxy_container_label": {"org.label-schema.name": "nginx-proxy-manager"},
         "verify_ssl": True,
         "proxy_host_defaults": None,
-        "attach_to_proxy": True,
-        "own_container": "docker-to-nginx",
+        "own_container": None,
+        "own_container_label": {"de.haeki.name": "docker-to-nginx"},
+        "attach_self": "container",
     }
     with open(config_path, "r") as f:
         loaded = json.load(f)
@@ -40,14 +43,14 @@ def load_config(config_path: str) -> dict:
     return _defaults
 
 
-def get_env_vars(container: Container):
+def get_env_vars(container: Container) -> dict:
     """
     Get the environment variables of a container as a dict
     """
     attrs = container.attrs
     return dict(x.split("=", 1) for x in attrs["Config"]["Env"])
 
-def get_labels(container: Container):
+def get_labels(container: Container) -> dict:
     """
     Get the labels of a container as a dict
     """
@@ -58,7 +61,7 @@ def get_labels(container: Container):
 def get_matching_hosts(domain_names: list[str], domains: dict[str, dict]):
     """
     Check if a host with the given server names is already found in the domains dict
-    If multiple servernames match to different hosts, return None
+    If multiple server names match to different hosts, return None
     """
     res: dict = None
     for domain_name in domain_names:
@@ -71,23 +74,28 @@ def get_matching_hosts(domain_names: list[str], domains: dict[str, dict]):
 
 
 def attach_container_to_network(
-    container: Container, network_names: list[str], dry_run=False
+    docker_client: docker.DockerClient,
+    container: Container,
+    network: Network | str,
+    dry_run=False,
+    force=False
 ) -> str | None:
     """
-    Attach a container to a network in the list of network names
+    Attach a container to a network
     """
-    logger.debug("Try to attach %s to a network in %s", container.name, network_names)
-    networks = {n.name: n for n in container.client.networks.list()}
-    for net_name in network_names:
-        net = networks.get(net_name, None)
-        if net:
-            if dry_run:
-                logger.info("Would attach %s to network %s", container.name, net_name)
-                return net_name
-            logger.info("Attaching %s to network %s", container.name, net_name)
-            net.connect(container)
-            return net_name
-    return None
+    logger.debug("Try to attach %s to network %s", container.name, network)
+    if isinstance(network, str):
+        network: Network = docker_client.networks.get(network)
+    else:
+        network.reload()
+    if not force and container.id in network.attrs["Containers"]:
+        logger.debug("%s is already attached to network %s", container.name, network.name)
+        return
+    if dry_run:
+        logger.info("Would attach %s to network %s", container.name, network.name)
+        return
+    logger.info("Attaching %s to network %s", container.name, network.name)
+    network.connect(container)
 
 
 def attach_proxy_to_network(
@@ -95,6 +103,7 @@ def attach_proxy_to_network(
 ) -> str | None:
     """
     Attach the proxy_container to a network of the container
+    This is not preferred because we can only guess the correct network
     """
     container_networks = set(container.attrs["NetworkSettings"]["Networks"].keys())
     logger.debug(
@@ -130,13 +139,17 @@ def attach_proxy_to_network(
     return None
 
 
-def find_proxy_host(container: Container, proxy_network: list[str]):
+def find_proxy_host(container: Container, proxy_network: str):
+    """
+    Check if the container is attached to the proxy network and return its IP or DNS name
+    If not attached, return None
+    DNS name is preferred if available
+    """
     container_networks: dict[str, dict] = container.attrs["NetworkSettings"]["Networks"]
-    for pn in proxy_network:
-        if network := container_networks.get(pn, None):
-            if network["DNSNames"] and container.name in network["DNSNames"]:
-                return container.name
-            return network["IPAddress"]
+    if network := container_networks.get(proxy_network, None):
+        if network["DNSNames"] and container.name in network["DNSNames"]:
+            return container.name
+        return network["IPAddress"]
     return None
 
 
@@ -144,24 +157,22 @@ def check_for_changes(
     nginx_proxy_manager: ApiHandler,
     docker_client: docker.DockerClient,
     letsencrypt_config: dict,
-    proxy_network: str | list[str],
-    proxy_container: str,
+    proxy_network: Network | str,
+    proxy_container: Container | str,
     attach_network: str | None = "container",
     proxy_host_defaults=None,
     dry_run=False,
 ):
-    try:
-        proxy_container = docker_client.containers.get(proxy_container)
-    except NotFound:
-        logger.warning("Could not find the proxy container %s", proxy_container)
-        proxy_container = None
+    if attach_network:
+        if isinstance(proxy_container, str):
+            proxy_container = docker_client.containers.get(proxy_container)
+        else:
+            proxy_container.reload()
+        if isinstance(proxy_network, str):
+            proxy_network = docker_client.networks.get(proxy_network)
+        else:
+            proxy_network.reload()
     proxy_host_defaults = proxy_host_defaults or {}
-    if proxy_container:
-        proxy_network = list(
-            proxy_container.attrs["NetworkSettings"]["Networks"].keys()
-        )
-    elif isinstance(proxy_network, str):
-        proxy_network = [proxy_network]
     logger.debug("Looking for changes in container")
     domains = {}
     for host in nginx_proxy_manager.get_proxy_hosts():
@@ -183,25 +194,20 @@ def check_for_changes(
         proxy_host = find_proxy_host(container, proxy_network)
         if not proxy_host:
             if attach_network == "container":
-                if attached_net := attach_container_to_network(
-                    container=container, network_names=proxy_network, dry_run=dry_run
-                ):
-                    logger.info(f"Attached {cont_name} to network {attached_net}")
-                    container.reload()
-                    proxy_host = find_proxy_host(container, proxy_network)
-                    if not proxy_host:
-                        raise NullResource(
-                            f"Failed to attach {cont_name} to network {proxy_network}"
-                        )
-                else:
+                attach_container_to_network(
+                    docker_client=docker_client,
+                    container=container,
+                    network=proxy_network,
+                    dry_run=dry_run
+                )
+                logger.info(f"Attached {cont_name} to network {proxy_network}")
+                container.reload()
+                proxy_host = find_proxy_host(container, proxy_network)
+                if not proxy_host:
                     raise NullResource(
-                        f"Failed to attach {cont_name} to any network in {proxy_network}"
+                        f"Failed to attach {cont_name} to network {proxy_network}"
                     )
             elif attach_network == "proxy":
-                if not proxy_container:
-                    raise NotFound(
-                        f"Proxy container {proxy_container} not found. But is required for attaching networks in proxy mode"
-                    )
                 if attached_net := attach_proxy_to_network(
                     container=container,
                     proxy_container=proxy_container,
@@ -212,15 +218,14 @@ def check_for_changes(
                         proxy_container.name,
                         attached_net,
                     )
-                    proxy_network.append(attached_net)
-                    proxy_host = find_proxy_host(container, proxy_network)
+                    proxy_host = find_proxy_host(container, attached_net)
                     if not proxy_host:
                         raise NullResource(
-                            f"Failed to attach {proxy_container.name} to network {proxy_network}"
+                            f"Failed to attach {proxy_container.name} to network {attached_net}"
                         )
                 else:
                     raise NullResource(
-                        f"Failed to attach the nginx-proxy-manager container ({proxy_container.name}) to any of the conatiners networks {cont_name}"
+                        f"Failed to attach the nginx-proxy-manager container ({proxy_container.name}) to any of the containers networks {cont_name}"
                     )
             else:
                 raise NullResource(
@@ -271,6 +276,149 @@ def setup_logger(log_path: str, verbose: bool):
     stream_handler.setFormatter(formatter)
     root_logger.addHandler(stream_handler)
 
+def get_container_by_label(
+    docker_client: docker.DockerClient, label_key: str | dict
+) -> Container | None:
+    """
+    Get a container by its label
+    """
+    container: Container
+    for container in docker_client.containers.list():
+        labels = get_labels(container)
+        if isinstance(label_key, dict):
+            if all(labels.get(key) == val for key, val in label_key.items()):
+                return container
+        elif isinstance(label_key, str):
+            if labels.get(label_key) == "nginx-proxy-manager":
+                return container
+        else:
+            raise ValueError("label_key must be a dict or str")
+    return None
+
+
+def init(config: dict, docker_client: docker.DockerClient, dry_run=False) -> int:
+    """
+    Initialize the application with the given config
+    """
+    if not config.get("proxy_container"):
+        # Try to find the proxy container
+        label_key = config.get("proxy_container_label")
+        container = get_container_by_label(docker_client, label_key)
+        if not container:
+            logger.error("Could not find proxy container by label %s", label_key)
+            return -1
+        config["proxy_container"] = container
+    else:
+        try:
+            container = docker_client.containers.get(config["proxy_container"])
+            config["proxy_container"] = container
+            logger.info("Using proxy container %s from config", container.name)
+        except NotFound:
+            logger.error(
+                "Could not find proxy container %s", config["proxy_container"]
+            )
+            return -1
+    if not config.get("own_container"):
+        # Try to find own container
+        label_key = config.get("own_container_label")
+        container = get_container_by_label(docker_client, label_key)
+        if not container:
+            logger.error("Could not find own container by label %s", label_key)
+            return -1
+        config["own_container"] = container
+    else:
+        try:
+            container = docker_client.containers.get(config["own_container"])
+            config["own_container"] = container
+            logger.info("Using own container %s from config", container.name)
+        except NotFound:
+            logger.error("Could not find own container %s", config["own_container"])
+            return -1
+    if not config.get("proxy_network"):
+        # Try to find the proxy network from the proxy container
+        container: Container = config["proxy_container"]
+        compose_project = get_labels(container).get("com.docker.compose.project")
+        net_name: str
+        networks: dict = container.attrs["NetworkSettings"]["Networks"]
+        if len(networks) == 1:
+            config["proxy_network"] = list(networks.keys())[0]
+        if len(networks) > 1:
+            for net_name, net in networks.items():
+                if compose_project:
+                    try:
+                        network: Network = docker_client.networks.get(net["NetworkID"])
+                        if network.attrs.get("Labels", {}).get(
+                            "com.docker.compose.project"
+                        ) == compose_project:
+                            config["proxy_network"] = net_name
+                            break
+                    except NotFound:
+                        continue
+                elif net_name.removesuffix("_default") in container.name:
+                    config["proxy_network"] = net_name
+                    break
+            else:
+                logger.error(
+                    "Could not identify proxy network for container %s",
+                    container.name,
+                )
+                return -1
+        else:
+            logger.error(
+                "Proxy container %s has no networks", container.name
+            )
+            return -1
+    else:
+        try:
+            _ = docker_client.networks.get(config["proxy_network"])
+        except NotFound:
+            logger.error(
+                "Could not find proxy network %s", config["proxy_network"]
+            )
+            return -1
+        logger.info(
+            "Using proxy network %s from config", config["proxy_network"]
+        )
+    if config.get("attach_self") == "container":
+        attach_container_to_network(
+            docker_client=docker_client,
+            container=config["own_container"],
+            network=config["proxy_network"],
+            dry_run=dry_run,
+        )
+    elif config.get("attach_self") == "proxy":
+        attach_proxy_to_network(
+            container=config["own_container"],
+            proxy_container=config["proxy_container"],
+            dry_run=dry_run,
+        )
+    else:
+        if not config["own_container"].id in config["proxy_network"].attrs["Containers"]:
+            logger.error(
+                "Own container %s is not attached to proxy network %s",
+                config["own_container"].name,
+                config["proxy_network"],
+            )
+            return -1
+    proxy_host = find_proxy_host(config["proxy_container"], config["proxy_network"])
+    if not proxy_host:
+        logger.error(
+            "Proxy container %s is not attached to proxy network %s",
+            config["proxy_container"].name,
+            config["proxy_network"],
+        )
+        return -1
+    if not config["nginx_proxy_manager_url"]:
+        config["nginx_proxy_manager_url"] = f"http://{proxy_host}:81/api"
+        logger.info(
+            "Using nginx proxy manager URL %s",
+            config["nginx_proxy_manager_url"],
+        )
+    return 0
+
+
+
+
 
 def main():
     """
@@ -304,13 +452,16 @@ def main():
     log_path = args.log_path if args.log_path not in ["", "-"] else None
     setup_logger(log_path, args.verbose)
 
+    docker_client = docker.from_env()
+
+    init()
+
     nginx_proxy_manager = ApiHandler(
         api_url=config["nginx_proxy_manager_url"],
         user=config["nginx_proxy_manager_user"],
         password=config["nginx_proxy_manager_password"],
         verify_ssl=config["verify_ssl"],
     )
-    docker_client = docker.from_env()
 
     if args.dry_run:
         logger.info("Running in dry-run mode")
@@ -318,13 +469,6 @@ def main():
         logger.info("Starting one time check ")
     else:
         logger.info("Starting the check with interval %d sec", args.interval)
-    if config["attach_to_proxy"]:
-        try:
-            own_container = docker_client.containers.get(config["own_container"])
-        except NotFound:
-            logger.warning("Could not find own container %s", config["own_container"])
-            return
-        attach_container_to_network(own_container, config["proxy_network"])
     while True:
         check_for_changes(
             nginx_proxy_manager=nginx_proxy_manager,
