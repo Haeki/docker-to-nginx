@@ -39,9 +39,10 @@ def load_config(config_path: str) -> dict:
     with open(config_path, "r") as f:
         loaded = json.load(f)
     _defaults.update(loaded)
-    _defaults["nginx_proxy_manager_url"] = _defaults["nginx_proxy_manager_url"].rstrip(
-        "/"
-    )
+    if _defaults["nginx_proxy_manager_url"]:
+        _defaults["nginx_proxy_manager_url"] = _defaults[
+            "nginx_proxy_manager_url"
+        ].rstrip("/")
     return _defaults
 
 
