@@ -152,9 +152,7 @@ def attach_proxy_to_network(
     return None
 
 
-def find_proxy_host(
-    docker_client: docker.DockerClient, container: Container, network: str | Network
-) -> str | None:
+def find_proxy_host(container: Container, network: str | Network) -> str | None:
     """
     Check if the container is attached to the proxy network and return its IP or DNS name
     If not attached, return None
@@ -221,9 +219,7 @@ def check_for_changes(
                 logger.info(f"Attached {cont_name} to network {proxy_network.name}")
                 time.sleep(1)
                 container.reload()
-            proxy_host = find_proxy_host(
-                docker_client=docker_client, container=container, network=proxy_network
-            )
+            proxy_host = find_proxy_host(container=container, network=proxy_network)
         elif attach_network == "proxy":
             if attached_net := attach_proxy_to_network(
                 container=container,
@@ -235,13 +231,9 @@ def check_for_changes(
                     proxy_container.name,
                     attached_net,
                 )
-            proxy_host = find_proxy_host(
-                docker_client=docker_client, container=container, network=attached_net
-            )
+            proxy_host = find_proxy_host(container=container, network=attached_net)
         else:
-            proxy_host = find_proxy_host(
-                docker_client=docker_client, container=container, network=proxy_network
-            )
+            proxy_host = find_proxy_host(container=container, network=proxy_network)
         if not proxy_host:
             raise NullResource(f"proxy_host for {cont_name} not found")
         if matching_host:
@@ -414,7 +406,10 @@ def init(config: dict, docker_client: docker.DockerClient, dry_run=False) -> int
                 config["proxy_network"],
             )
             return -1
-    proxy_host = find_proxy_host(config["proxy_container"], config["proxy_network"])
+    proxy_host = find_proxy_host(
+        container=config["proxy_container"],
+        network=config["proxy_network"],
+    )
     if not proxy_host:
         logger.error(
             "Proxy container %s is not attached to proxy network %s",
