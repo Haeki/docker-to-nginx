@@ -314,7 +314,7 @@ def init(config: dict, docker_client: docker.DockerClient, dry_run=False) -> int
         container = get_container_by_label(docker_client, label_key)
         if not container:
             logger.error("Could not find proxy container by label %s", label_key)
-            return -1
+            return 1
         config["proxy_container"] = container
     else:
         try:
@@ -323,14 +323,14 @@ def init(config: dict, docker_client: docker.DockerClient, dry_run=False) -> int
             logger.info("Using proxy container %s from config", container.name)
         except NotFound:
             logger.error("Could not find proxy container %s", config["proxy_container"])
-            return -1
+            return 1
     if not config.get("own_container"):
         # Try to find own container
         label_key = config.get("own_container_label")
         container = get_container_by_label(docker_client, label_key)
         if not container:
             logger.error("Could not find own container by label %s", label_key)
-            return -1
+            return 1
         config["own_container"] = container
     else:
         try:
@@ -339,7 +339,7 @@ def init(config: dict, docker_client: docker.DockerClient, dry_run=False) -> int
             logger.info("Using own container %s from config", container.name)
         except NotFound:
             logger.error("Could not find own container %s", config["own_container"])
-            return -1
+            return 1
     if not config.get("proxy_network"):
         # Try to find the proxy network from the proxy container
         container: Container = config["proxy_container"]
@@ -348,7 +348,7 @@ def init(config: dict, docker_client: docker.DockerClient, dry_run=False) -> int
         networks: dict = container.attrs["NetworkSettings"]["Networks"]
         if len(networks) == 1:
             config["proxy_network"] = list(networks.keys())[0]
-        if len(networks) > 1:
+        elif len(networks) > 1:
             for net_name, net in networks.items():
                 if compose_project:
                     try:
@@ -371,16 +371,16 @@ def init(config: dict, docker_client: docker.DockerClient, dry_run=False) -> int
                     "Could not identify proxy network for container %s",
                     container.name,
                 )
-                return -1
+                return 1
         else:
             logger.error("Proxy container %s has no networks", container.name)
-            return -1
+            return 1
     else:
         try:
             _ = docker_client.networks.get(config["proxy_network"])
         except NotFound:
             logger.error("Could not find proxy network %s", config["proxy_network"])
-            return -1
+            return 1
         logger.info("Using proxy network %s from config", config["proxy_network"])
     if config.get("attach_self") == "container":
         attach_container_to_network(
@@ -405,7 +405,7 @@ def init(config: dict, docker_client: docker.DockerClient, dry_run=False) -> int
                 config["own_container"].name,
                 config["proxy_network"],
             )
-            return -1
+            return 1
     proxy_host = find_proxy_host(
         container=config["proxy_container"],
         network=config["proxy_network"],
@@ -416,7 +416,7 @@ def init(config: dict, docker_client: docker.DockerClient, dry_run=False) -> int
             config["proxy_container"].name,
             config["proxy_network"],
         )
-        return -1
+        return 1
     if not config["nginx_proxy_manager_url"]:
         config["nginx_proxy_manager_url"] = f"http://{proxy_host}:81/api"
         logger.info(
