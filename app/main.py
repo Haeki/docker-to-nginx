@@ -49,7 +49,7 @@ def get_labels(container: Container):
     """
     Get the labels of a container as a dict
     """
-    return container.attrs["config"]["Labels"]
+    return container.attrs["Config"]["Labels"]
 
 
 
