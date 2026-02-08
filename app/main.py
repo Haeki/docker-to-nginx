@@ -12,7 +12,7 @@ from docker.errors import NullResource, NotFound
 from docker.models.containers import Container
 from docker.models.networks import Network
 from nginx_proxy_manager import ApiHandler
-
+from unbound_dns import UnboundDnsHandler
 
 logger = logging.getLogger(f"app.main")
 
@@ -35,6 +35,9 @@ def load_config(config_path: str) -> dict:
         "own_container": None,
         "own_container_label": {"de.haeki.name": "docker-to-nginx"},
         "attach_self": "container",
+        "unbound_api_url": None,
+        "unbound_api_key": None,
+        "unbound_api_secret": None,
     }
     with open(config_path, "r") as f:
         loaded = json.load(f)
@@ -43,6 +46,8 @@ def load_config(config_path: str) -> dict:
         _defaults["nginx_proxy_manager_url"] = _defaults[
             "nginx_proxy_manager_url"
         ].rstrip("/")
+    if _defaults["unbound_api_url"]:
+        _defaults["unbound_api_url"] = _defaults["unbound_api_url"].rstrip("/")
     return _defaults
 
 
@@ -168,9 +173,27 @@ def find_proxy_host(container: Container, network: str | Network) -> str | None:
     return None
 
 
+def get_proxy_ip(proxy_container: Container | str) -> str:
+    """
+    Get the IP address of the proxy container
+    """
+    ports = proxy_container.attrs["NetworkSettings"]["Ports"]
+    for p in ["80/tcp", "443/tcp"]:
+        p_entries = ports.get(p, None)
+        if not p_entries:
+            continue
+        for pe in p_entries:
+            if pe.get("HotPort", None) in [80, 443] and (
+                h_ip := pe.get("HostIp", None)
+            ):
+                return h_ip
+    return None
+
+
 def check_for_changes(
     nginx_proxy_manager: ApiHandler,
     docker_client: docker.DockerClient,
+    dns_handler: UnboundDnsHandler | None,
     letsencrypt_config: dict,
     proxy_network: Network | str,
     proxy_container: Container | str,
@@ -178,15 +201,16 @@ def check_for_changes(
     proxy_host_defaults=None,
     dry_run=False,
 ):
+    if isinstance(proxy_container, str):
+        proxy_container = docker_client.containers.get(proxy_container)
+    else:
+        proxy_container.reload()
     if attach_network:
-        if isinstance(proxy_container, str):
-            proxy_container = docker_client.containers.get(proxy_container)
-        else:
-            proxy_container.reload()
         if isinstance(proxy_network, str):
             proxy_network = docker_client.networks.get(proxy_network)
         else:
             proxy_network.reload()
+    proxy_ip = get_proxy_ip(proxy_container)
     proxy_host_defaults = proxy_host_defaults or {}
     logger.debug("Looking for changes in container")
     domains = {}
@@ -247,6 +271,16 @@ def check_for_changes(
                 dry_run=dry_run,
                 **proxy_host_defaults,
             )
+            if dns_handler and proxy_ip:
+                for fqdn in domain_names:
+                    hostname, domain = fqdn.split(".", 1)
+                    dns_handler.add_entry(
+                        hostname=hostname,
+                        domain=domain,
+                        server=proxy_ip,
+                        check_existing=True,
+                        description=f"Added by docker-to-nginx for container {cont_name}",
+                    )
         else:
             logger.info("Creating new host for %s", domain_names)
             nginx_proxy_manager.create_proxy_host(
@@ -257,6 +291,16 @@ def check_for_changes(
                 dry_run=dry_run,
                 **proxy_host_defaults,
             )
+            if dns_handler and proxy_ip:
+                for fqdn in domain_names:
+                    hostname, domain = fqdn.split(".", 1)
+                    dns_handler.add_entry(
+                        hostname=hostname,
+                        domain=domain,
+                        server=proxy_ip,
+                        check_existing=True,
+                        description=f"Added by docker-to-nginx for container {cont_name}",
+                    )
 
     containers = docker_client.containers.list()
     logger.debug("Checking %d containers", len(containers))
@@ -460,7 +504,9 @@ def main():
 
     docker_client = docker.from_env()
 
-    if exit_code := init(docker_client=docker_client, config=config, dry_run=args.dry_run):
+    if exit_code := init(
+        docker_client=docker_client, config=config, dry_run=args.dry_run
+    ):
         return exit_code
 
     nginx_proxy_manager = ApiHandler(
@@ -484,10 +530,20 @@ def main():
         stop_event.set()
 
     signal.signal(signal.SIGINT, interrupt_handler)
+    dns_handler = (
+        UnboundDnsHandler(
+            api_url=config["unbound_api_url"],
+            api_key=config["unbound_api_key"],
+            api_secret=config["unbound_api_secret"],
+        )
+        if config.get("unbound_api_url")
+        else None
+    )
     while True:
         check_for_changes(
             nginx_proxy_manager=nginx_proxy_manager,
             docker_client=docker_client,
+            dns_handler=dns_handler,
             proxy_network=config["proxy_network"],
             attach_network=config["attach_network"],
             proxy_container=config["proxy_container"],

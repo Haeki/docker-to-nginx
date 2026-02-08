@@ -219,7 +219,7 @@ def _create_letsencrypt_config(letsencrypt_config: dict) -> dict:
             "dns_cloudflare_api_token", None
         ):
             letsencrypt_config["dns_provider_credentials"] = (
-                f"# Cloudflare API token\r\ndns_cloudflare_api_token={dns_cloudflare_api_token}"
+                f"dns_cloudflare_api_token={dns_cloudflare_api_token}"
             )
         return letsencrypt_config
     return {"letsencrypt_agree": False, "dns_challenge": False}
@@ -257,18 +257,18 @@ def create_proxy_host(
         "forward_scheme": "http",
         "forward_host": forward_host,
         "forward_port": forward_port,
-        "block_exploits": 1,
+        "block_exploits": True,
         "access_list_id": 0,
         "certificate_id": "new",
-        "ssl_forced": 1,
+        "ssl_forced": True,
         "meta": _create_letsencrypt_config(letsencrypt_config),
         "advanced_config": "",
         "locations": [],
-        "caching_enabled": 0,
-        "allow_websocket_upgrade": 0,
-        "http2_support": 1,
-        "hsts_enabled": 1,
-        "hsts_subdomains": 0,
+        "caching_enabled": False,
+        "allow_websocket_upgrade": True,
+        "http2_support": True,
+        "hsts_enabled": True,
+        "hsts_subdomains": True,
     }
     payload.update(kwargs)
     if dry_run:
