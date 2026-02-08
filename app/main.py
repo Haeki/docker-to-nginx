@@ -183,7 +183,7 @@ def get_proxy_ip(proxy_container: Container | str) -> str:
         if not p_entries:
             continue
         for pe in p_entries:
-            if pe.get("HostPort", None) in [80, 443] and (
+            if pe.get("HostPort", None) in ["80", "443", 80, 443] and (
                 h_ip := pe.get("HostIp", None)
             ):
                 return h_ip
