@@ -178,12 +178,12 @@ def get_proxy_ip(proxy_container: Container | str) -> str:
     Get the IP address of the proxy container
     """
     ports = proxy_container.attrs["NetworkSettings"]["Ports"]
-    for p in ["80/tcp", "443/tcp"]:
+    for p in ["443/tcp", "80/tcp"]:
         p_entries = ports.get(p, None)
         if not p_entries:
             continue
         for pe in p_entries:
-            if pe.get("HotPort", None) in [80, 443] and (
+            if pe.get("HostPort", None) in [80, 443] and (
                 h_ip := pe.get("HostIp", None)
             ):
                 return h_ip
@@ -211,6 +211,7 @@ def check_for_changes(
         else:
             proxy_network.reload()
     proxy_ip = get_proxy_ip(proxy_container)
+    logger.debug("Proxy IP: %s", proxy_ip)
     proxy_host_defaults = proxy_host_defaults or {}
     logger.debug("Looking for changes in container")
     domains = {}
