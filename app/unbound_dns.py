@@ -1,5 +1,8 @@
 import requests
 from typing import Optional
+import logging
+
+logger = logging.getLogger(__name__)
 
 class UnboundDnsHandler:
     def __init__(self, api_url: str, api_key: str, api_secret: str):
@@ -100,6 +103,7 @@ class UnboundDnsHandler:
         txtdata: str = "",
     ) -> dict:
         """Add a new Host Entry"""
+        logger.info("Adding host override for %s: %s.%s", server, hostname, domain)
         url = f"{self.api_url}/api/unbound/settings/add_host_override/"
         payload = {
             "host": {
@@ -134,6 +138,7 @@ class UnboundDnsHandler:
             enabled: Whether the alias is enabled
             description: Optional description
         """
+        logger.info("Adding alias for host %s: %s.%s", host_uuid, hostname, domain)
         url = f"{self.api_url}/api/unbound/settings/add_host_alias/"
         payload = {
             "alias": {
@@ -163,6 +168,7 @@ class UnboundDnsHandler:
     ) -> dict:
         """Add a new entry for a given fqdn"""
         if check_existing and (e := self.find_entries(hostname, domain)):
+            logger.info("Entry for %s.%s already exists, skipping creation: %s", hostname, domain, e)
             return e
 
         if host_uuid:
@@ -244,3 +250,14 @@ class UnboundDnsHandler:
         response.raise_for_status()
         return response.json()
 
+
+def main():
+    # Example usage
+    api_url = "https://firewall.haeki.de"
+    key="RVTvdVVmvYLmj1CBgZdmGkGJ6mEf/9kAV6csPJjShWLRonONauqwlH88qxwwW9u5PXIa2gEmL39Dk0BS"
+    secret="+9cS9BGY+wI/P3FRk4ybzqhz+JgstDznEYGjyxUWuSI0lxtD6SHm7U/DLmiZ6WBZb0PfWA7erwobj7kE"
+
+    handler = UnboundDnsHandler(api_url, key, secret)
+    print(handler.list_overrides())
+
+if __name__ == "__main__":    main()
