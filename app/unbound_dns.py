@@ -173,6 +173,7 @@ class UnboundDnsHandler:
                 enabled=enabled,
                 description=description,
             )
+            self.reconfigure()
             return self.get_alias(res["uuid"])
 
         if host_fqdn:
@@ -189,6 +190,7 @@ class UnboundDnsHandler:
                     enabled=enabled,
                     description=description,
                 )
+                self.reconfigure()
                 return self.get_alias(res["uuid"])
 
         if overrides := self.get_overrides_by("server").get(server):
@@ -200,6 +202,7 @@ class UnboundDnsHandler:
                 enabled=enabled,
                 description=description,
             )
+            self.reconfigure()
             return self.get_alias(res["uuid"])
         res = self.add_host(
             hostname=hostname,
@@ -210,6 +213,7 @@ class UnboundDnsHandler:
             ttl=ttl,
             txtdata=txtdata,
         )
+        self.reconfigure()
         return self.get_override(res["uuid"])
 
     def delete_host(self, host_uuid: str) -> dict:
